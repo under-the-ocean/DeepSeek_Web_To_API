@@ -58,11 +58,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      - name: Setup Go (no cache to avoid conflicts)
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: go.sum
+          cache: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -83,6 +83,7 @@ jobs:
           GOARCH: ${{ matrix.target.goarch }}
           GOARM: ${{ matrix.target.goarm || '' }}
         run: |
+          mkdir -p dist
           ext=""
           if [ "${{ matrix.target.goos }}" = "windows" ]; then ext=".exe"; fi
           go build -v -ldflags="-X main.Version=${{ env.BUILD_VERSION }}"             -o "dist/deepseek-web-to-api_${{ matrix.target.label }}${ext}"             ./cmd/DeepSeek_Web_To_API/
