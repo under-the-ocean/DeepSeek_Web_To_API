@@ -34,14 +34,13 @@ jobs:
           npm ci --prefix webui --prefer-offline --no-audit
           npm run build --prefix webui
 
-      - name: Upload WebUI Artifact
+      - name: Upload WebUI
         uses: actions/upload-artifact@v4
         with:
           name: webui-dist
           path: webui/dist/
-          retention-days: 1
 
-  build-binaries:
+  build:
     needs: build-webui
     runs-on: ubuntu-latest
     strategy:
@@ -54,6 +53,7 @@ jobs:
           - { goos: darwin, goarch: arm64, label: darwin_arm64 }
           - { goos: windows, goarch: amd64, label: windows_amd64 }
           - { goos: windows, goarch: arm64, label: windows_arm64 }
+      fail-fast: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,6 +63,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
 
       - name: Download WebUI
         uses: actions/download-artifact@v4
@@ -80,17 +87,17 @@ jobs:
           if [ "${{ matrix.target.goos }}" = "windows" ]; then ext=".exe"; fi
           go build -v -ldflags="-X main.Version=${{ env.BUILD_VERSION }}"             -o "dist/deepseek-web-to-api_${{ matrix.target.label }}${ext}"             ./cmd/DeepSeek_Web_To_API/
 
-      - name: Package
+      - name: Package (Unix)
+        if: matrix.target.goos != 'windows'
         run: |
           cd dist
-          label="${{ matrix.target.label }}"
-          ext=""
-          if [ "${{ matrix.target.goos }}" = "windows" ]; then ext=".exe"; fi
-          if [ "${{ matrix.target.goos }}" = "linux" ]; then
-            tar czf "deepseek-web-to-api_${label}.tar.gz" "deepseek-web-to-api_${label}${ext}"
-          else
-            zip "deepseek-web-to-api_${label}.zip" "deepseek-web-to-api_${label}${ext}"
-          fi
+          tar czf "deepseek-web-to-api_${{ matrix.target.label }}.tar.gz"             "deepseek-web-to-api_${{ matrix.target.label }}"
+
+      - name: Package (Windows)
+        if: matrix.target.goos == 'windows'
+        run: |
+          cd dist
+          zip "deepseek-web-to-api_${{ matrix.target.label }}.zip"             "deepseek-web-to-api_${{ matrix.target.label }}.exe"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
