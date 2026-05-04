@@ -142,7 +142,7 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		handlePowError(w, historySession, a, err)
 		return
 	}
-	payload := stdReq.CompletionPayload(sessionID)
+	payload := stdReq.CompletionPayload(sessionID, a.ParentMessageID)
 	resp, err := h.DS.CallCompletion(r.Context(), a, payload, pow, 3)
 	if err != nil {
 		if !a.UseConfigToken && shared.CompletionErrorDetail(err).Status == http.StatusUnauthorized {

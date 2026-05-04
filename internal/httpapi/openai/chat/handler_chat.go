@@ -86,7 +86,15 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIInlineFileError(w, err)
 		return
 	}
-	stdReq, err := promptcompat.NormalizeOpenAIChatRequest(h.Store, req, requestTraceID(r))
+
+	var stdReq promptcompat.StandardRequest
+	if a.DeepSeekSessionID != "" {
+		sessionID = a.DeepSeekSessionID
+		config.Logger.Debug("[session] reusing existing DeepSeek session", "session_id", sessionID, "account", a.AccountID)
+		stdReq, err = promptcompat.NormalizeOpenAIChatRequestIncremental(h.Store, req, requestTraceID(r))
+	} else {
+		stdReq, err = promptcompat.NormalizeOpenAIChatRequest(h.Store, req, requestTraceID(r))
+	}
 	if err != nil {
 		if historySession != nil {
 			historySession.error(http.StatusBadRequest, err.Error(), "error", "", "")
@@ -108,26 +116,32 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		historySession.updateHistoryText(stdReq.HistoryText)
 	}
 
-	sessionID, err = h.DS.CreateSession(r.Context(), a, 3)
-	if err != nil {
-		sessionDetail := shared.SessionErrorDetail(err)
-		if sessionDetail.Stopped || sessionDetail.Status == http.StatusGatewayTimeout {
-			writeSessionCallError(w, historySession, err)
+	if sessionID == "" {
+		sessionID, err = h.DS.CreateSession(r.Context(), a, 3)
+		if err != nil {
+			sessionDetail := shared.SessionErrorDetail(err)
+			if sessionDetail.Stopped || sessionDetail.Status == http.StatusGatewayTimeout {
+				writeSessionCallError(w, historySession, err)
+				return
+			}
+			if a.UseConfigToken {
+				if historySession != nil {
+					historySession.error(http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.", "error", "", "")
+				}
+				writeOpenAIError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
+			} else {
+				a.MarkDirectTokenInvalid()
+				if historySession != nil {
+					historySession.error(http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.", "error", "", "")
+				}
+				writeOpenAIError(w, http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.")
+			}
 			return
 		}
-		if a.UseConfigToken {
-			if historySession != nil {
-				historySession.error(http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.", "error", "", "")
-			}
-			writeOpenAIError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
-		} else {
-			a.MarkDirectTokenInvalid()
-			if historySession != nil {
-				historySession.error(http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.", "error", "", "")
-			}
-			writeOpenAIError(w, http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.")
+		if sessionID != "" && a.SessionKey != "" {
+			h.Auth.BindDeepSeekSession(a, sessionID)
+			config.Logger.Debug("[session] bound new DeepSeek session", "session_id", sessionID, "account", a.AccountID, "session_key", a.SessionKey)
 		}
-		return
 	}
 	pow, err := h.DS.GetPow(r.Context(), a, 3)
 	if err != nil {
@@ -145,7 +159,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusUnauthorized, "Failed to get PoW (invalid token or unknown error).")
 		return
 	}
-	payload := stdReq.CompletionPayload(sessionID)
+	payload := stdReq.CompletionPayload(sessionID, a.ParentMessageID)
 	resp, err := h.DS.CallCompletion(r.Context(), a, payload, pow, 3)
 	if nextSessionID := strings.TrimSpace(asString(payload["chat_session_id"])); nextSessionID != "" {
 		sessionID = nextSessionID

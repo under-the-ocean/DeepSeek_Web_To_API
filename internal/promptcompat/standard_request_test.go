@@ -29,7 +29,7 @@ func TestStandardRequestCompletionPayloadSetsModelTypeFromResolvedModel(t *testi
 				},
 			}
 
-			payload := req.CompletionPayload("session-123")
+			payload := req.CompletionPayload("session-123", 0)
 
 			if got := payload["model_type"]; got != tc.modelType {
 				t.Fatalf("expected model_type %s, got %#v", tc.modelType, got)

@@ -40,7 +40,7 @@ func (h *Handler) testAPI(w http.ResponseWriter, r *http.Request) {
 		FinalPrompt:   prompt.MessagesPrepare([]map[string]any{{"role": "user", "content": message}}),
 		Thinking:      thinking,
 		Search:        search,
-	}.CompletionPayload(sessionID)
+	}.CompletionPayload(sessionID, 0)
 	h.writeAPITestCompletion(w, proxyCtx, authCtx, payload, pow, thinking)
 }
 

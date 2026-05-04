@@ -187,6 +187,17 @@ func scanToolMarkupTagAt(text string, start int) (ToolMarkupTag, bool) {
 			end = nameEnd - 1
 		}
 	}
+	if end >= nameEnd {
+		nextLT := strings.IndexByte(text[nameEnd:], '<')
+		if nextLT >= 0 && end >= nameEnd+nextLT {
+			end = nameEnd - 1
+		}
+	}
+	if end < nameEnd {
+		for end+1 < len(text) && (text[end+1] == ' ' || text[end+1] == '\t' || text[end+1] == '\n' || text[end+1] == '\r') {
+			end++
+		}
+	}
 	trimmed := strings.TrimSpace(text[start : end+1])
 	return ToolMarkupTag{
 		Start:       start,
@@ -256,6 +267,9 @@ func consumeToolMarkupNamePrefixOnce(lower, text string, idx int) (int, bool) {
 	}
 	if strings.HasPrefix(lower[idx:], "dsml") {
 		return idx + len("dsml"), true
+	}
+	if idx < len(text) && text[idx] == '>' {
+		return idx + 1, true
 	}
 	return idx, false
 }

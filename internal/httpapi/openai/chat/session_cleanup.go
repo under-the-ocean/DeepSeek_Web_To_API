@@ -13,6 +13,10 @@ func (h *Handler) autoDeleteRemoteSession(ctx context.Context, a *auth.RequestAu
 	if mode == "none" || a.DeepSeekToken == "" {
 		return
 	}
+	if a.DeepSeekSessionID != "" {
+		config.Logger.Debug("[auto_delete_sessions] skipped because session is being reused for conversation continuity", "account", a.AccountID, "session_id", sessionID)
+		return
+	}
 
 	deleteBaseCtx := context.WithoutCancel(ctx)
 	deleteCtx, cancel := context.WithTimeout(deleteBaseCtx, 10*time.Second)

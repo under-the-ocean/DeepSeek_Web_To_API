@@ -39,14 +39,16 @@ const (
 )
 
 type RequestAuth struct {
-	UseConfigToken bool
-	DeepSeekToken  string
-	CallerID       string
-	AccountID      string
-	Account        config.Account
-	TriedAccounts  map[string]bool
-	SessionKey     string
-	resolver       *Resolver
+	UseConfigToken    bool
+	DeepSeekToken     string
+	DeepSeekSessionID string
+	ParentMessageID   int
+	CallerID          string
+	AccountID         string
+	Account           config.Account
+	TriedAccounts     map[string]bool
+	SessionKey        string
+	resolver          *Resolver
 }
 
 type LoginFunc func(ctx context.Context, acc config.Account) (string, error)
@@ -105,6 +107,10 @@ func (r *Resolver) Determine(req *http.Request) (*RequestAuth, error) {
 // the same Claude Code / Codex / OpenAI conversation land on the same DeepSeek
 // account.
 // On successful managed acquire, the binding is created/refreshed.
+// Additionally, if a DeepSeek session_id was previously bound, it is returned
+// in RequestAuth.DeepSeekSessionID for conversation continuity, and the
+// parent_message_id is returned in RequestAuth.ParentMessageID so the next
+// completion payload can chain within the same upstream session.
 func (r *Resolver) DetermineWithSession(req *http.Request, body []byte) (*RequestAuth, error) {
 	callerKey := extractCallerToken(req)
 	if callerKey == "" {
@@ -125,6 +131,8 @@ func (r *Resolver) DetermineWithSession(req *http.Request, body []byte) (*Reques
 	}
 
 	var sessionKey string
+	var existingSessionID string
+	var existingParentMessageID int
 	target := requestHeader(req, TargetAccountHeader, LegacyTargetAccountHeader)
 	explicitTarget := target != ""
 	if len(body) > 0 && r.Pool != nil && r.Pool.Affinity != nil {
@@ -133,8 +141,15 @@ func (r *Resolver) DetermineWithSession(req *http.Request, body []byte) (*Reques
 		unlock := r.Pool.Affinity.Lock(sessionKey)
 		defer unlock()
 		if sessionKey != "" && target == "" {
-			if bound := r.Pool.Affinity.Lookup(sessionKey); bound != "" {
-				target = bound
+			boundAccount, boundSession, boundParentID := r.Pool.Affinity.LookupSession(sessionKey)
+			if boundAccount != "" {
+				target = boundAccount
+			}
+			if boundSession != "" {
+				existingSessionID = boundSession
+			}
+			if boundParentID > 0 {
+				existingParentMessageID = boundParentID
 			}
 		}
 	}
@@ -145,6 +160,8 @@ func (r *Resolver) DetermineWithSession(req *http.Request, body []byte) (*Reques
 	}
 	if a != nil {
 		a.SessionKey = sessionKey
+		a.DeepSeekSessionID = existingSessionID
+		a.ParentMessageID = existingParentMessageID
 	}
 	if sessionKey != "" && a != nil && a.UseConfigToken && a.AccountID != "" && r.Pool != nil && r.Pool.Affinity != nil {
 		r.Pool.Affinity.Bind(sessionKey, a.AccountID)
@@ -416,6 +433,30 @@ func (r *Resolver) bindSessionAffinity(a *RequestAuth) {
 		return
 	}
 	r.Pool.Affinity.Bind(a.SessionKey, a.AccountID)
+}
+
+// BindDeepSeekSession associates a DeepSeek session_id with the current session key.
+// This enables conversation continuity: follow-up requests can reuse the same upstream session.
+func (r *Resolver) BindDeepSeekSession(a *RequestAuth, deepseekSessionID string) {
+	if r == nil || r.Pool == nil || r.Pool.Affinity == nil || a == nil {
+		return
+	}
+	if a.SessionKey == "" || a.AccountID == "" || deepseekSessionID == "" {
+		return
+	}
+	r.Pool.Affinity.BindSession(a.SessionKey, a.AccountID, deepseekSessionID)
+}
+
+// StoreParentMessageID persists the response_message_id from a DeepSeek completion
+// so the next request in this conversation can set parent_message_id for chain continuity.
+func (r *Resolver) StoreParentMessageID(a *RequestAuth, messageID int) {
+	if r == nil || r.Pool == nil || r.Pool.Affinity == nil || a == nil {
+		return
+	}
+	if a.SessionKey == "" || messageID <= 0 {
+		return
+	}
+	r.Pool.Affinity.StoreParentMessageID(a.SessionKey, messageID)
 }
 
 func (r *Resolver) Release(a *RequestAuth) {

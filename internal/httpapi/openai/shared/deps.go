@@ -23,6 +23,8 @@ type AuthResolver interface {
 	DetermineWithSession(req *http.Request, body []byte) (*auth.RequestAuth, error)
 	DetermineCaller(req *http.Request) (*auth.RequestAuth, error)
 	Release(a *auth.RequestAuth)
+	BindDeepSeekSession(a *auth.RequestAuth, deepseekSessionID string)
+	StoreParentMessageID(a *auth.RequestAuth, messageID int)
 }
 
 type DeepSeekCaller interface {

@@ -111,7 +111,7 @@ func (h *Handler) handleDirectClaudeIfAvailable(w http.ResponseWriter, r *http.R
 		writeClaudeError(w, http.StatusUnauthorized, "Failed to get PoW (invalid token or unknown error).")
 		return true
 	}
-	payload := norm.Standard.CompletionPayload(sessionID)
+	payload := norm.Standard.CompletionPayload(sessionID, 0)
 	resp, err := h.DS.CallCompletion(r.Context(), a, payload, pow, 3)
 	if err != nil {
 		config.Logger.Warn("[claude] completion request failed", "stream", norm.Standard.Stream, "error", err)

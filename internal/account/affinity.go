@@ -25,8 +25,10 @@ type Affinity struct {
 }
 
 type affinityEntry struct {
-	accountID string
-	expiresAt time.Time
+	accountID       string
+	sessionID       string
+	parentMessageID int
+	expiresAt       time.Time
 }
 
 type affinityLock struct {
@@ -69,16 +71,80 @@ func (a *Affinity) Lookup(key string) string {
 	return e.accountID
 }
 
+// LookupSession returns the bound account, DeepSeek session_id, and parentMessageID for a session key.
+// Refreshes TTL on hit. Returns empty/zero values if not found or expired.
+func (a *Affinity) LookupSession(key string) (accountID string, sessionID string, parentMessageID int) {
+	if a == nil || key == "" {
+		return "", "", 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	e, ok := a.bindings[key]
+	if !ok {
+		return "", "", 0
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(a.bindings, key)
+		return "", "", 0
+	}
+	e.expiresAt = time.Now().Add(a.ttl)
+	return e.accountID, e.sessionID, e.parentMessageID
+}
+
 // Bind associates a session key with an account, refreshing TTL.
+// Preserves any existing DeepSeek session_id and parentMessageID to maintain conversation continuity.
 func (a *Affinity) Bind(key, accountID string) {
 	if a == nil || key == "" || accountID == "" {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	existingSessionID := ""
+	existingParentMessageID := 0
+	if e, ok := a.bindings[key]; ok {
+		existingSessionID = e.sessionID
+		existingParentMessageID = e.parentMessageID
+	}
 	a.bindings[key] = &affinityEntry{
-		accountID: accountID,
-		expiresAt: time.Now().Add(a.ttl),
+		accountID:       accountID,
+		sessionID:       existingSessionID,
+		parentMessageID: existingParentMessageID,
+		expiresAt:       time.Now().Add(a.ttl),
+	}
+}
+
+// BindSession associates a session key with both an account and a DeepSeek session_id.
+// This enables conversation continuity: follow-up requests reuse the same upstream session.
+// Preserves any existing parentMessageID.
+func (a *Affinity) BindSession(key, accountID, deepseekSessionID string) {
+	if a == nil || key == "" || accountID == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	existingParentMessageID := 0
+	if e, ok := a.bindings[key]; ok {
+		existingParentMessageID = e.parentMessageID
+	}
+	a.bindings[key] = &affinityEntry{
+		accountID:       accountID,
+		sessionID:       deepseekSessionID,
+		parentMessageID: existingParentMessageID,
+		expiresAt:       time.Now().Add(a.ttl),
+	}
+}
+
+// StoreParentMessageID stores the response_message_id from a DeepSeek completion
+// so the next request in this conversation can set parent_message_id for chain
+// continuity within the same session.
+func (a *Affinity) StoreParentMessageID(key string, messageID int) {
+	if a == nil || key == "" || messageID <= 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if e, ok := a.bindings[key]; ok {
+		e.parentMessageID = messageID
 	}
 }
 

@@ -53,6 +53,7 @@ func (h *Handler) handleNonStreamWithRetry(w http.ResponseWriter, ctx context.Co
 		addRefFileTokensToUsage(result.body, refFileTokens)
 		result.finishReason = chatFinishReason(result.body)
 		if !shouldRetryChatNonStream(result, attempts) {
+			h.Auth.StoreParentMessageID(a, result.responseMessageID)
 			h.finishChatNonStreamResult(w, result, attempts, usagePrompt, refFileTokens, requireToolCall, historySession)
 			return
 		}
@@ -163,10 +164,12 @@ func (h *Handler) handleStreamWithRetry(w http.ResponseWriter, r *http.Request, 
 	for {
 		terminalWritten, retryable := h.consumeChatStreamAttempt(r, currentResp, streamRuntime, initialType, thinkingEnabled, historySession, attempts < emptyOutputRetryMaxAttempts())
 		if terminalWritten {
+			h.Auth.StoreParentMessageID(a, streamRuntime.responseMessageID)
 			logChatStreamTerminal(streamRuntime, attempts)
 			return
 		}
 		if !retryable || !emptyOutputRetryEnabled() || attempts >= emptyOutputRetryMaxAttempts() {
+			h.Auth.StoreParentMessageID(a, streamRuntime.responseMessageID)
 			streamRuntime.finalize("stop", false)
 			recordChatStreamHistory(streamRuntime, historySession)
 			config.Logger.Info("[openai_empty_retry] terminal empty output", "surface", "chat.completions", "stream", true, "retry_attempts", attempts, "success_source", "none")

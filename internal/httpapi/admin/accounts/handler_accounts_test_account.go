@@ -111,7 +111,7 @@ func (h *Handler) runAccountCompletion(ctx context.Context, a *authn.RequestAuth
 		FinalPrompt:   prompt.MessagesPrepare([]map[string]any{{"role": "user", "content": message}}),
 		Thinking:      thinking,
 		Search:        search,
-	}.CompletionPayload(sessionID)
+	}.CompletionPayload(sessionID, 0)
 	resp, err := h.DS.CallCompletion(ctx, a, payload, pow, 1)
 	if err != nil {
 		result["message"] = "请求失败: " + err.Error()
