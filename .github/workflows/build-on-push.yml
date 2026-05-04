@@ -16,32 +16,7 @@ env:
   BUILD_VERSION: "dev"
 
 jobs:
-  build-webui:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: webui/package-lock.json
-
-      - name: Build WebUI
-        run: |
-          npm ci --prefix webui --prefer-offline --no-audit
-          npm run build --prefix webui
-
-      - name: Upload WebUI
-        uses: actions/upload-artifact@v4
-        with:
-          name: webui-dist
-          path: webui/dist/
-
-  build:
-    needs: build-webui
+  build-all:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -58,7 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Go (no cache to avoid conflicts)
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -71,11 +46,10 @@ jobs:
           cache: npm
           cache-dependency-path: webui/package-lock.json
 
-      - name: Download WebUI
-        uses: actions/download-artifact@v4
-        with:
-          name: webui-dist
-          path: webui/dist/
+      - name: Build WebUI
+        run: |
+          npm ci --prefix webui --prefer-offline --no-audit
+          npm run build --prefix webui
 
       - name: Build Binary
         env:
