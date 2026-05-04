@@ -24,13 +24,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: \${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: \${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: webui/package-lock.json
 
@@ -41,7 +41,7 @@ jobs:
 
       - name: Build Go Binary
         run: |
-          go build -v -o dist/deepseek-web-to-api ./cmd/
+          go build -v -o dist/deepseek-web-to-api ./cmd/DeepSeek_Web_To_API/
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
