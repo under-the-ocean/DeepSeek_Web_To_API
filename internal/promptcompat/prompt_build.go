@@ -30,7 +30,7 @@ func BuildOpenAIPromptForAdapter(messagesRaw []any, toolsRaw any, traceID string
 // and any pending tool results. This is used when reusing an existing DeepSeek session
 // where conversation history is already maintained upstream.
 func BuildOpenAIPromptIncremental(messagesRaw []any, toolsRaw any, traceID string, toolPolicy ToolChoicePolicy, thinkingEnabled bool) (string, []string) {
-	incrementalMessages := extractIncrementalMessages(messagesRaw)
+	incrementalMessages := ExtractIncrementalMessages(messagesRaw)
 	if len(incrementalMessages) == 0 {
 		return BuildOpenAIPrompt(messagesRaw, toolsRaw, traceID, toolPolicy, thinkingEnabled)
 	}
@@ -42,10 +42,10 @@ func BuildOpenAIPromptIncremental(messagesRaw []any, toolsRaw any, traceID strin
 	return prompt.MessagesPrepareWithThinking(messages, thinkingEnabled), toolNames
 }
 
-// extractIncrementalMessages extracts the last user message and any preceding
+// ExtractIncrementalMessages extracts the last user message and any preceding
 // tool/function messages that are part of the same turn. This is used for
 // incremental prompts when reusing an existing DeepSeek session.
-func extractIncrementalMessages(messagesRaw []any) []any {
+func ExtractIncrementalMessages(messagesRaw []any) []any {
 	if len(messagesRaw) == 0 {
 		return nil
 	}

@@ -113,7 +113,18 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIInlineFileError(w, err)
 		return
 	}
-	stdReq, err := promptcompat.NormalizeOpenAIResponsesRequest(h.Store, req, traceID)
+
+	var sessionID string
+	var stdReq promptcompat.StandardRequest
+	var normErr error
+	if a.DeepSeekSessionID != "" {
+		sessionID = a.DeepSeekSessionID
+		config.Logger.Debug("[session] reusing existing DeepSeek session for responses", "session_id", sessionID, "account", a.AccountID)
+		stdReq, normErr = promptcompat.NormalizeOpenAIResponsesRequestIncremental(h.Store, req, traceID)
+	} else {
+		stdReq, normErr = promptcompat.NormalizeOpenAIResponsesRequest(h.Store, req, traceID)
+	}
+	err = normErr
 	if err != nil {
 		if historySession != nil {
 			historySession.Error(http.StatusBadRequest, err.Error(), "error", "", "")
@@ -132,10 +143,15 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID, err := h.DS.CreateSession(r.Context(), a, 3)
-	if err != nil {
-		handleCreateSessionError(w, historySession, a, err)
-		return
+	if sessionID == "" {
+		sessionID, err = h.DS.CreateSession(r.Context(), a, 3)
+		if err != nil {
+			handleCreateSessionError(w, historySession, a, err)
+			return
+		}
+	}
+	if sessionID != "" && a.SessionKey != "" {
+		h.Auth.BindDeepSeekSession(a, sessionID)
 	}
 	pow, err := h.DS.GetPow(r.Context(), a, 3)
 	if err != nil {

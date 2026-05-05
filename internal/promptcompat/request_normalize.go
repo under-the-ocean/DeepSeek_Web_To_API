@@ -186,6 +186,72 @@ func NormalizeOpenAIResponsesRequest(store ConfigReader, req map[string]any, tra
 	}, nil
 }
 
+// NormalizeOpenAIResponsesRequestIncremental builds a request with only the incremental
+// content (last user message + tool results). This is used when reusing an existing
+// DeepSeek session where conversation history is maintained upstream.
+func NormalizeOpenAIResponsesRequestIncremental(store ConfigReader, req map[string]any, traceID string) (StandardRequest, error) {
+	model, _ := req["model"].(string)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return StandardRequest{}, fmt.Errorf("request must include 'model'")
+	}
+	resolvedModel, ok := config.ResolveModel(store, model)
+	if !ok {
+		return StandardRequest{}, fmt.Errorf("model %q is not available", model)
+	}
+	defaultThinkingEnabled, searchEnabled, _ := config.GetModelConfig(resolvedModel)
+	explicitThinkingEnabled, hasThinkingOverride := util.ResolveThinkingOverride(req)
+	thinkingEnabled := util.ResolveThinkingEnabled(req, defaultThinkingEnabled)
+	if config.IsNoThinkingModel(resolvedModel) {
+		thinkingEnabled = false
+	}
+	exposeReasoning := hasThinkingOverride && explicitThinkingEnabled && thinkingEnabled
+
+	allowWideInput := true
+	if store != nil {
+		allowWideInput = store.CompatWideInputStrictOutput()
+	}
+	var messagesRaw []any
+	if allowWideInput {
+		messagesRaw = ResponsesMessagesFromRequest(req)
+	} else if msgs, ok := req["messages"].([]any); ok && len(msgs) > 0 {
+		messagesRaw = msgs
+	}
+	if len(messagesRaw) == 0 {
+		return StandardRequest{}, fmt.Errorf("request must include 'input' or 'messages'")
+	}
+	messagesRaw = repairOpenAIToolMessages(messagesRaw)
+	toolPolicy, err := parseToolChoicePolicy(req["tool_choice"], req["tools"])
+	if err != nil {
+		return StandardRequest{}, err
+	}
+	finalPrompt, toolNames := BuildOpenAIPromptIncremental(messagesRaw, req["tools"], traceID, toolPolicy, thinkingEnabled)
+	if !toolPolicy.IsNone() {
+		toolNames = ensureToolDetectionEnabled(toolNames, req["tools"])
+		toolPolicy.Allowed = namesToSet(toolNames)
+	}
+	passThrough := collectOpenAIChatPassThrough(req)
+	refFileIDs := CollectOpenAIRefFileIDs(req)
+
+	return StandardRequest{
+		Surface:         "openai_responses",
+		RequestedModel:  model,
+		ResolvedModel:   resolvedModel,
+		ResponseModel:   model,
+		Messages:        messagesRaw,
+		ToolsRaw:        req["tools"],
+		FinalPrompt:     finalPrompt,
+		ToolNames:       toolNames,
+		ToolChoice:      toolPolicy,
+		Stream:          util.ToBool(req["stream"]),
+		Thinking:        thinkingEnabled,
+		ExposeReasoning: exposeReasoning,
+		Search:          searchEnabled,
+		RefFileIDs:      refFileIDs,
+		PassThrough:     passThrough,
+	}, nil
+}
+
 func ensureToolDetectionEnabled(toolNames []string, toolsRaw any) []string {
 	if len(toolNames) > 0 {
 		return toolNames

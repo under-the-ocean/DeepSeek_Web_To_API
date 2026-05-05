@@ -1,4 +1,4 @@
-name: Auto Build on Push
+name: Auto Build & Release on Push
 
 on:
   push:
@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 env:
   GO_VERSION: "1.23.x"
@@ -32,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -60,22 +63,129 @@ jobs:
           mkdir -p dist
           ext=""
           if [ "${{ matrix.target.goos }}" = "windows" ]; then ext=".exe"; fi
-          go build -v -ldflags="-X main.Version=${{ env.BUILD_VERSION }}"             -o "dist/deepseek-web-to-api_${{ matrix.target.label }}${ext}"             ./cmd/DeepSeek_Web_To_API/
+          go build -v -ldflags="-s -w -X DeepSeek_Web_To_API/internal/version.BuildVersion=${{ env.BUILD_VERSION }}" \
+            -o "dist/deepseek-web-to-api_${{ matrix.target.label }}${ext}" \
+            ./cmd/DeepSeek_Web_To_API/
 
       - name: Package (Unix)
         if: matrix.target.goos != 'windows'
         run: |
-          cd dist
-          tar czf "deepseek-web-to-api_${{ matrix.target.label }}.tar.gz"             "deepseek-web-to-api_${{ matrix.target.label }}"
+          mkdir -p "dist/package/deepseek-web-to-api_${{ matrix.target.label }}"
+          cp "dist/deepseek-web-to-api_${{ matrix.target.label }}" \
+             "dist/package/deepseek-web-to-api_${{ matrix.target.label }}/"
+          cp config.example.json .env.example \
+             "dist/package/deepseek-web-to-api_${{ matrix.target.label }}/"
+          cp -R static/admin \
+             "dist/package/deepseek-web-to-api_${{ matrix.target.label }}/static/"
+          cd dist/package
+          tar czf "../deepseek-web-to-api_${{ matrix.target.label }}.tar.gz" \
+            "deepseek-web-to-api_${{ matrix.target.label }}"
 
       - name: Package (Windows)
         if: matrix.target.goos == 'windows'
         run: |
-          cd dist
-          zip "deepseek-web-to-api_${{ matrix.target.label }}.zip"             "deepseek-web-to-api_${{ matrix.target.label }}.exe"
+          mkdir -p "dist/package/deepseek-web-to-api_${{ matrix.target.label }}"
+          cp "dist/deepseek-web-to-api_${{ matrix.target.label }}.exe" \
+             "dist/package/deepseek-web-to-api_${{ matrix.target.label }}/"
+          cp config.example.json .env.example \
+             "dist/package/deepseek-web-to-api_${{ matrix.target.label }}/"
+          cp -R static/admin \
+             "dist/package/deepseek-web-to-api_${{ matrix.target.label }}/static/"
+          cd dist/package
+          zip -rq "../deepseek-web-to-api_${{ matrix.target.label }}.zip" \
+            "deepseek-web-to-api_${{ matrix.target.label }}"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: deepseek-web-to-api_${{ matrix.target.label }}
           path: dist/deepseek-web-to-api_${{ matrix.target.label }}.*
+
+  build-docker-and-release:
+    needs: build-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download All Binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deepseek-web-to-api_*
+          path: dist/
+          merge-multiple: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Release
+        env:
+          BUILD_VERSION: ${{ env.BUILD_VERSION }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          if [ -f VERSION ]; then
+            BASE_VER="$(tr -d '[:space:]' < VERSION)"
+          else
+            BASE_VER="0.0.0"
+          fi
+          TAG="${BASE_VER}-ci.${SHORT_SHA}"
+
+          mkdir -p dist/docker-input
+
+          cp "dist/deepseek-web-to-api_linux_amd64.tar.gz" "dist/docker-input/linux_amd64.tar.gz"
+          cp "dist/deepseek-web-to-api_linux_arm64.tar.gz" "dist/docker-input/linux_arm64.tar.gz"
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --target runtime-from-dist \
+            --output type=docker,dest=/tmp/docker_linux_amd64.tar \
+            .
+
+          docker buildx build \
+            --platform linux/arm64 \
+            --target runtime-from-dist \
+            --output type=docker,dest=/tmp/docker_linux_arm64.tar \
+            .
+
+          gzip -c /tmp/docker_linux_amd64.tar > "dist/deepseek-web-to-api_${TAG}_docker_linux_amd64.tar.gz"
+          gzip -c /tmp/docker_linux_arm64.tar > "dist/deepseek-web-to-api_${TAG}_docker_linux_arm64.tar.gz"
+
+          (cd dist && sha256sum *.tar.gz *.zip > sha256sums.txt)
+
+      - name: Create / Update Release and Upload Assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          if [ -f VERSION ]; then
+            BASE_VER="$(tr -d '[:space:]' < VERSION)"
+          else
+            BASE_VER="0.0.0"
+          fi
+          TAG="${BASE_VER}-ci.${SHORT_SHA}"
+
+          FILES=(
+            dist/*.tar.gz
+            dist/*.zip
+            dist/sha256sums.txt
+          )
+
+          RELEASE_TITLE="CI Build ${TAG}"
+          RELEASE_NOTES="Auto-built from commit ${GITHUB_SHA}
+Branch: ${GITHUB_REF_NAME}
+Version: ${BASE_VER}"
+
+          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
+
+          gh release create "${TAG}" \
+            --title "${RELEASE_TITLE}" \
+            --notes "${RELEASE_NOTES}" \
+            --target "${GITHUB_SHA}" \
+            "${FILES[@]}"

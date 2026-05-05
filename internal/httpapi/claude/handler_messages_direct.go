@@ -74,26 +74,45 @@ func (h *Handler) handleDirectClaudeIfAvailable(w http.ResponseWriter, r *http.R
 	if historySession == nil {
 		historySession = historycapture.Start(h.ChatHistory, r, a, norm.Standard)
 	}
-	sessionID, err := h.DS.CreateSession(r.Context(), a, 3)
-	if err != nil {
-		sessionDetail := openaishared.SessionErrorDetail(err)
-		if sessionDetail.Stopped || sessionDetail.Status == http.StatusGatewayTimeout {
-			writeClaudeSessionCallError(w, historySession, err)
-			return true
+
+	var sessionID string
+	if a.DeepSeekSessionID != "" {
+		sessionID = a.DeepSeekSessionID
+		config.Logger.Debug("[session] reusing existing DeepSeek session for claude", "session_id", sessionID, "account", a.AccountID)
+		// 复用 session 时，仅使用增量消息（最后一条 user 消息 + 同轮 tool 结果）构建 prompt
+		incrementalMessages := promptcompat.ExtractIncrementalMessages(norm.Standard.Messages)
+		if len(incrementalMessages) > 0 {
+			incrementalPrompt := prompt.MessagesPrepareWithThinking(toMessageMaps(incrementalMessages), norm.Standard.Thinking)
+			norm.Standard.FinalPrompt = incrementalPrompt
+			norm.Standard.PromptTokenText = incrementalPrompt
 		}
-		if a.UseConfigToken {
-			if historySession != nil {
-				historySession.Error(http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.", "error", "", "")
+	}
+	if sessionID == "" {
+		var err error
+		sessionID, err = h.DS.CreateSession(r.Context(), a, 3)
+		if err != nil {
+			sessionDetail := openaishared.SessionErrorDetail(err)
+			if sessionDetail.Stopped || sessionDetail.Status == http.StatusGatewayTimeout {
+				writeClaudeSessionCallError(w, historySession, err)
+				return true
 			}
-			writeClaudeError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
+			if a.UseConfigToken {
+				if historySession != nil {
+					historySession.Error(http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.", "error", "", "")
+				}
+				writeClaudeError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
+				return true
+			}
+			if historySession != nil {
+				historySession.Error(http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.", "error", "", "")
+			}
+			a.MarkDirectTokenInvalid()
+			writeClaudeError(w, http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.")
 			return true
 		}
-		if historySession != nil {
-			historySession.Error(http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.", "error", "", "")
-		}
-		a.MarkDirectTokenInvalid()
-		writeClaudeError(w, http.StatusUnauthorized, "Invalid token. If this should be a DeepSeek_Web_To_API key, add it to config.keys first.")
-		return true
+	}
+	if sessionID != "" && a.SessionKey != "" {
+		h.Auth.BindDeepSeekSession(a, sessionID)
 	}
 	pow, err := h.DS.GetPow(r.Context(), a, 3)
 	if err != nil {
@@ -111,7 +130,7 @@ func (h *Handler) handleDirectClaudeIfAvailable(w http.ResponseWriter, r *http.R
 		writeClaudeError(w, http.StatusUnauthorized, "Failed to get PoW (invalid token or unknown error).")
 		return true
 	}
-	payload := norm.Standard.CompletionPayload(sessionID, 0)
+	payload := norm.Standard.CompletionPayload(sessionID, a.ParentMessageID)
 	resp, err := h.DS.CallCompletion(r.Context(), a, payload, pow, 3)
 	if err != nil {
 		config.Logger.Warn("[claude] completion request failed", "stream", norm.Standard.Stream, "error", err)
